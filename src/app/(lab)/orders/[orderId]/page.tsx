@@ -2,7 +2,7 @@
 
 import { notFound } from "next/navigation";
 import { useMemo, useState } from "react";
-import { Activity, Clock3 } from "lucide-react";
+import { Activity, Camera, Clock3, QrCode } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { ColdChainBadge } from "@/components/shared/ColdChainBadge";
@@ -19,6 +19,8 @@ import { useOrderStore } from "@/lib/store";
 import { writeProvenanceRecord } from "@/lib/stellar";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default function OrderDetailPage({ params }: { params: { orderId: string } }) {
   const orderEntry = useOrderStore((state) =>
     state.orders.find((entry) => entry.id === params.orderId)
@@ -30,6 +32,8 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
   const attachRecord = useOrderStore((state) => state.attachRecord);
   const [temperature, setTemperature] = useState(orderEntry?.temperatureAtReceipt?.toString() ?? "");
   const [loading, setLoading] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [txStep, setTxStep] = useState<number | null>(null);
 
   if (!orderEntry) notFound();
 
@@ -79,6 +83,14 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
 
     try {
       setLoading(true);
+      setShowScanner(true);
+      await wait(1400);
+      setShowScanner(false);
+      setTxStep(0);
+      await wait(450);
+      setTxStep(1);
+      await wait(450);
+      setTxStep(2);
       updateOrderStatus(order.id, "confirmed_good");
       const record = await writeProvenanceRecord("goods_receipt", order.id, {
         temperature_at_receipt: temperature ? Number(temperature) : null,
@@ -89,8 +101,11 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
         status: "confirmed_good",
         temperatureAtReceipt: temperature ? Number(temperature) : undefined
       });
+      setTxStep(null);
       toast.success("Delivery confirmed and recorded on Stellar");
     } catch (error) {
+      setShowScanner(false);
+      setTxStep(null);
       updateOrderStatus(order.id, previousStatus);
       toast.error(error instanceof Error ? error.message : "Stellar write failed");
     } finally {
@@ -104,7 +119,9 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
         title={`Order ${order.id}`}
         subtitle={`${order.supplierName} · ${ORDER_STATUS_LABELS[order.status]}`}
         action={
-          order.txHash ? (
+          loading && txStep !== null ? (
+            <StellarBadge status="processing" currentStep={txStep} />
+          ) : order.txHash ? (
             <StellarBadge href={`https://stellar.expert/explorer/testnet/tx/${order.txHash}`} />
           ) : null
         }
@@ -156,11 +173,17 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
               loading={loading}
               disabled={!["dispatched", "in_transit", "delivered"].includes(order.status)}
             >
-              Confirm delivery
+              <QrCode className="h-4 w-4" />
+              Scan QR to confirm delivery
             </Button>
             <Button variant="ghost" className="mt-3 w-full bg-white/10 text-white hover:bg-white/15">
               Raise dispute
             </Button>
+            {loading && txStep !== null ? (
+              <div className="mt-4">
+                <StellarBadge status="processing" currentStep={txStep} className="w-full" />
+              </div>
+            ) : null}
           </div>
           <div className="rounded-[32px] border border-white/70 bg-white/90 p-6">
             <h2 className="text-xl font-semibold text-brand-navy">Stellar provenance</h2>
@@ -193,7 +216,13 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
                 Each checkpoint is paired with a provenance state for judge-friendly traceability.
               </p>
             </div>
-            {receiptRecord ? <StellarBadge href={receiptRecord.explorerUrl} /> : <ColdChainBadge breached={false} />}
+            {loading && txStep !== null ? (
+              <StellarBadge status="processing" currentStep={txStep} />
+            ) : receiptRecord ? (
+              <StellarBadge href={receiptRecord.explorerUrl} />
+            ) : (
+              <ColdChainBadge breached={false} />
+            )}
           </div>
           <div className="mt-6 grid gap-6 xl:grid-cols-[1.05fr,0.95fr]">
             <div className="rounded-[28px] bg-gradient-to-br from-brand-navy to-[#243d83] p-5 text-white">
@@ -259,7 +288,9 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
                     </div>
                   </div>
                   <div className="flex items-center justify-start md:justify-end">
-                    {receiptRecord && point.verified ? (
+                    {loading && txStep !== null && point.verified ? (
+                      <StellarBadge status="processing" currentStep={txStep} />
+                    ) : receiptRecord && point.verified ? (
                       <StellarBadge href={receiptRecord.explorerUrl} />
                     ) : (
                       <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
@@ -272,6 +303,32 @@ export default function OrderDetailPage({ params }: { params: { orderId: string 
             </div>
           </div>
         </section>
+      ) : null}
+      {showScanner ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-[32px] border border-white/10 bg-slate-950/95 p-6 text-white shadow-2xl">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-emerald-200">
+                  Delivery Scan
+                </p>
+                <h3 className="mt-2 text-2xl font-semibold">Scanning QR payload</h3>
+              </div>
+              <Camera className="h-6 w-6 text-emerald-200" />
+            </div>
+            <div className="mt-6 rounded-[28px] border border-emerald-400/30 bg-black p-5">
+              <div className="relative mx-auto flex aspect-square max-w-[240px] items-center justify-center rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_center,rgba(94,234,212,0.2),transparent_55%),linear-gradient(135deg,rgba(11,110,79,0.16),rgba(123,97,255,0.18))]">
+                <div className="absolute inset-6 rounded-[20px] border border-emerald-300/40" />
+                <div className="absolute left-6 right-6 top-1/2 h-0.5 -translate-y-1/2 bg-emerald-300 shadow-[0_0_18px_rgba(110,231,183,0.8)] animate-pulse" />
+                <QrCode className="h-24 w-24 text-white/90" />
+              </div>
+            </div>
+            <p className="mt-5 text-sm text-slate-300">
+              Matching shipment QR metadata to the delivery payload before submitting the
+              provenance record to Stellar.
+            </p>
+          </div>
+        </div>
       ) : null}
     </div>
   );
